@@ -1,2 +1,1 @@
-[project.scripts]
 app = "run:app"
