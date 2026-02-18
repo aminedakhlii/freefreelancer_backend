@@ -10,7 +10,7 @@ Flask API for USFreelancer (auth, profiles, projects, proposals, interviews, mes
 cp .env.example .env
 ```
 
-Then edit `.env` and set your Supabase URL, service key, anon key, OpenAI API key, and JWT secret (from Supabase → Project Settings → API → JWT Settings).
+Then edit `.env` and set Supabase (DB), OpenAI, and **Firebase** (auth): `GOOGLE_APPLICATION_CREDENTIALS` or `FIREBASE_SERVICE_ACCOUNT_JSON` for token verification. See `docs/FIREBASE_AUTH.md`.
 
 ## Run locally
 

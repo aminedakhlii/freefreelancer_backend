@@ -1,8 +1,25 @@
+from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify, g
 from .auth_middleware import require_auth
 from .supabase_client import get_supabase
 
 bp = Blueprint("messages", __name__)
+
+def _unread_counts(supabase, thread_ids, my_id):
+    """Return dict thread_id -> count of messages received (not by me) and not read."""
+    if not thread_ids:
+        return {}
+    all_msgs = supabase.table("messages").select("thread_id,read_at,sender_id").in_("thread_id", list(thread_ids)).execute()
+    items = (all_msgs.data if all_msgs and hasattr(all_msgs, "data") else []) or []
+    counts = {}
+    for m in items:
+        if m.get("sender_id") == my_id:
+            continue
+        if m.get("read_at") is not None:
+            continue
+        tid = m.get("thread_id")
+        counts[tid] = counts.get(tid, 0) + 1
+    return counts
 
 @bp.route("/threads", methods=["GET"])
 @require_auth
@@ -10,6 +27,8 @@ def list_threads():
     supabase = get_supabase(service_role=True)
     r = supabase.table("message_threads").select("*, projects(title)").or_(f"client_id.eq.{g.user_id},freelancer_id.eq.{g.user_id}").order("updated_at", desc=True).execute()
     data = (r.data if r and hasattr(r, "data") else []) or []
+    thread_ids = [t["id"] for t in data]
+    unread = _unread_counts(supabase, thread_ids, g.user_id)
     other_ids = list({(t["freelancer_id"] if t["client_id"] == g.user_id else t["client_id"]) for t in data})
     profiles = {}
     if other_ids:
@@ -20,7 +39,19 @@ def list_threads():
     for t in data:
         oid = t["freelancer_id"] if t["client_id"] == g.user_id else t["client_id"]
         t["other_participant"] = profiles.get(str(oid))
+        t["unread_count"] = unread.get(t["id"], 0)
     return jsonify({"items": data})
+
+@bp.route("/thread/<thread_id>/read", methods=["POST"])
+@require_auth
+def mark_thread_read(thread_id):
+    supabase = get_supabase(service_role=True)
+    thread = supabase.table("message_threads").select("*").eq("id", thread_id).maybe_single().execute()
+    if not thread.data or (thread.data["client_id"] != g.user_id and thread.data["freelancer_id"] != g.user_id):
+        return jsonify({"error": "Forbidden"}), 403
+    now = datetime.now(timezone.utc).isoformat()
+    supabase.table("messages").update({"read_at": now}).eq("thread_id", thread_id).neq("sender_id", g.user_id).execute()
+    return jsonify({"ok": True}), 200
 
 @bp.route("/thread/<thread_id>", methods=["GET"])
 @require_auth
@@ -42,6 +73,9 @@ def get_thread(thread_id):
         "project_title": proj.data.get("title") if proj and getattr(proj, "data", None) and proj.data else None,
         "other_participant": other.data if other and getattr(other, "data", None) else None,
     }
+    # Mark messages in this thread as read (for current user as receiver)
+    now = datetime.now(timezone.utc).isoformat()
+    supabase.table("messages").update({"read_at": now}).eq("thread_id", thread_id).neq("sender_id", g.user_id).execute()
     return jsonify(payload)
 
 @bp.route("/thread", methods=["POST"])
@@ -90,6 +124,5 @@ def send_message(thread_id):
         return jsonify({"error": "Forbidden"}), 403
     payload = {"thread_id": thread_id, "sender_id": g.user_id, "body": body}
     r = supabase.table("messages").insert(payload).execute()
-    from datetime import datetime, timezone
     supabase.table("message_threads").update({"updated_at": datetime.now(timezone.utc).isoformat()}).eq("id", thread_id).execute()
     return jsonify(r.data[0] if r.data else {}), 201

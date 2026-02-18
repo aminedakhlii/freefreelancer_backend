@@ -4,14 +4,24 @@ from .supabase_client import get_supabase
 
 bp = Blueprint("auth", __name__)
 
+
+def _get_profile(supabase, user_id):
+    """Fetch profile by id. Returns profile dict or None. Uses limit(1) to avoid 204 from maybe_single()."""
+    r = supabase.table("profiles").select("*").eq("id", user_id).limit(1).execute()
+    data = getattr(r, "data", None) if r else None
+    if not data or not isinstance(data, list) or len(data) == 0:
+        return None
+    return data[0]
+
+
 @bp.route("/me", methods=["GET"])
 @require_auth
 def me():
     supabase = get_supabase(service_role=True)
-    r = supabase.table("profiles").select("*").eq("id", g.user_id).maybe_single().execute()
-    if not r or not getattr(r, "data", None):
+    data = _get_profile(supabase, g.user_id)
+    if not data:
         return jsonify({"error": "Profile not found"}), 404
-    return jsonify(r.data)
+    return jsonify(data)
 
 @bp.route("/profile", methods=["POST"])
 @require_auth
@@ -21,8 +31,7 @@ def create_profile():
     if role not in ("freelancer", "client"):
         return jsonify({"error": "Invalid role"}), 400
     supabase = get_supabase(service_role=True)
-    r = supabase.table("profiles").select("id").eq("id", g.user_id).maybe_single().execute()
-    existing = r.data if (r is not None and hasattr(r, "data")) else None
+    existing = _get_profile(supabase, g.user_id)
     if existing:
         supabase.table("profiles").update({"role": role}).eq("id", g.user_id).execute()
         r2 = supabase.table("profiles").select("*").eq("id", g.user_id).single().execute()
@@ -39,5 +48,5 @@ def session():
     if not uid:
         return jsonify({"user": None}), 200
     supabase = get_supabase(service_role=True)
-    r = supabase.table("profiles").select("*").eq("id", uid).maybe_single().execute()
-    return jsonify({"user": r.data if r and hasattr(r, "data") else None, "user_id": uid}), 200
+    data = _get_profile(supabase, uid)
+    return jsonify({"user": data, "user_id": uid}), 200

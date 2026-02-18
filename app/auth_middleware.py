@@ -1,35 +1,45 @@
-import jwt
 import os
-import urllib.request
 import json
 from functools import wraps
 from flask import request, g, jsonify
 
-JWT_SECRET = (os.getenv("JWT_SECRET") or "").strip()
-JWT_ALGORITHM = "HS256"
-SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").rstrip("/")
-SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
+_firebase_app = None
 
 
-def _verify_via_supabase_api(token: str):
-    """Fallback: validate token by calling Supabase Auth (works with any signing key)."""
-    if not SUPABASE_URL or not SUPABASE_ANON_KEY:
-        return None
+def _get_firebase_app():
+    global _firebase_app
+    if _firebase_app is not None:
+        return _firebase_app
+    import firebase_admin
+    from firebase_admin import credentials
+    cred_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+    if cred_path and os.path.isfile(cred_path):
+        cred = credentials.Certificate(cred_path)
+        _firebase_app = firebase_admin.initialize_app(cred)
+        return _firebase_app
+    sa_json = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
+    if sa_json:
+        try:
+            cred_dict = json.loads(sa_json)
+            cred = credentials.Certificate(cred_dict)
+            _firebase_app = firebase_admin.initialize_app(cred)
+            return _firebase_app
+        except (json.JSONDecodeError, ValueError):
+            pass
     try:
-        req = urllib.request.Request(
-            f"{SUPABASE_URL}/auth/v1/user",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "apikey": SUPABASE_ANON_KEY,
-                "Content-Type": "application/json",
-            },
-            method="GET",
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            if resp.status != 200:
-                return None
-            data = json.loads(resp.read().decode())
-            return data.get("id")
+        _firebase_app = firebase_admin.initialize_app()
+    except Exception:
+        _firebase_app = None
+    return _firebase_app
+
+
+def _verify_firebase_token(token: str):
+    """Verify Firebase ID token and return uid, or None."""
+    try:
+        from firebase_admin import auth as firebase_auth
+        _get_firebase_app()
+        decoded = firebase_auth.verify_id_token(token)
+        return decoded.get("uid")
     except Exception:
         return None
 
@@ -41,13 +51,8 @@ def get_current_user_id():
     token = auth[7:].strip()
     if not token:
         return None
-    if JWT_SECRET:
-        try:
-            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-            return payload.get("sub")
-        except Exception:
-            pass
-    return _verify_via_supabase_api(token)
+    return _verify_firebase_token(token)
+
 
 def require_auth(f):
     @wraps(f)
@@ -58,6 +63,7 @@ def require_auth(f):
         g.user_id = uid
         return f(*args, **kwargs)
     return decorated
+
 
 def require_role(role: str):
     def decorator(f):

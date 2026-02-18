@@ -3,6 +3,8 @@
 .env.*
 !.env.example
 
+service-account.json
+
 # Virtual environment
 .venv/
 venv/
