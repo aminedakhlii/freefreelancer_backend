@@ -9,7 +9,8 @@ def create_app():
     app.config["SUPABASE_ANON_KEY"] = os.getenv("SUPABASE_ANON_KEY")
     app.config["JWT_SECRET"] = os.getenv("JWT_SECRET")
     app.config["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
-    CORS(app, origins=os.getenv("CORS_ORIGINS", "http://localhost:4200").split(","), supports_credentials=True)
+    origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:4200").split(",") if o.strip()]
+    CORS(app, origins=origins, supports_credentials=True)
     from . import auth, profiles, projects, proposals, interviews, messages
     app.register_blueprint(auth.bp, url_prefix="/api/auth")
     app.register_blueprint(profiles.bp, url_prefix="/api/profiles")
